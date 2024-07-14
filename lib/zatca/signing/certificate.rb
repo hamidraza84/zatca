@@ -8,8 +8,12 @@ class ZATCA::Signing::Certificate
     ZATCA::Hashing.generate_hashes(base64_certificate)[:hexdigest_base64]
   end
 
-  def self.read_certificate(certificate_path)
-    certificate = OpenSSL::X509::Certificate.new(File.read(certificate_path))
+  def self.read_certificate(certificate_path: nil, certificate: nil)
+    if certificate_path.present?
+      certificate = OpenSSL::X509::Certificate.new(File.read(certificate_path))
+    else
+      certificate = OpenSSL::X509::Certificate.new(certificate)
+    end
 
     new(openssl_certificate: certificate)
   end
