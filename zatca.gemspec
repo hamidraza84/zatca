@@ -32,7 +32,7 @@ Gem::Specification.new do |spec|
 
   # Dependencies
   spec.add_dependency "zeitwerk", "~> 2.4"
-  spec.add_dependency "dry-schema", ">= 1.5"
+  spec.add_dependency "dry-schema", "1.13.4"
   spec.add_dependency "rqrcode", "~> 2.1.0"
   spec.add_dependency "httpx", "~> 0.21.0"
   spec.add_dependency "nokogiri", ">= 1.12"
