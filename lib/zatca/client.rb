@@ -1,14 +1,10 @@
-require "httpx"
+require "net/http"
+require "uri"
 require "json"
 
-# This wraps the API described here:
-# https://sandbox.zatca.gov.sa/IntegrationSandbox
 class ZATCA::Client
   attr_accessor :before_submitting_request, :before_parsing_response
 
-  # API URLs are not present in developer portal, they can only be found in a PDF
-  # called Fatoora Portal User Manual, here:
-  # https://zatca.gov.sa/en/E-Invoicing/Introduction/Guidelines/Documents/Fatoora%20portal%20user%20manual.pdf
   PRODUCTION_BASE_URL = "https://gw-fatoora.zatca.gov.sa/e-invoicing/core".freeze
   SANDBOX_BASE_URL = "https://gw-apic-gov.gazt.gov.sa/e-invoicing/developer-portal".freeze
   SIMULATION_BASE_URL = "https://gw-fatoora.zatca.gov.sa/e-invoicing/simulation".freeze
@@ -46,15 +42,14 @@ class ZATCA::Client
     @before_parsing_response = before_parsing_response
   end
 
-  # Reporting API
   def report_invoice(uuid:, invoice_hash:, invoice:, cleared:)
     request(
       path: "invoices/reporting/single",
       method: :post,
       body: {
-        uuid: uuid,
-        invoiceHash: invoice_hash,
-        invoice: invoice
+        uuid: uuid.force_encoding('UTF-8'),
+        invoiceHash: invoice_hash.force_encoding('UTF-8'),
+        invoice: invoice.force_encoding('UTF-8')
       },
       headers: {
         "Clearance-Status" => cleared ? "1" : "0"
@@ -62,15 +57,14 @@ class ZATCA::Client
     )
   end
 
-  # Clearance API
   def clear_invoice(uuid:, invoice_hash:, invoice:, cleared:)
     request(
       path: "invoices/clearance/single",
       method: :post,
       body: {
-        uuid: uuid,
-        invoiceHash: invoice_hash,
-        invoice: invoice
+        uuid: uuid.force_encoding('UTF-8'),
+        invoiceHash: invoice_hash.force_encoding('UTF-8'),
+        invoice: invoice.force_encoding('UTF-8')
       },
       headers: {
         "Clearance-Status" => cleared ? "1" : "0"
@@ -78,66 +72,42 @@ class ZATCA::Client
     )
   end
 
-  # Compliance CSID API
-  # This should be used to obtain credentials to issue a certificate in the next
-  # request (issue_production_csid)
-  #
-  # csid stands for Cryptographic Stamp Identifier
-  #
-  # csr stands for Certificate Signing Request
-  #     You should generate this via the ZATCA::Signing::CSR class
-  #
-  # otp stands for One Time Password.
-  #     You can get this from the fatoora portal
-  # Returns:
-  # {
-  #   "binarySecurityToken": "string" # To be used as a username in next request
-  #   "secret": "string" # To be used as a password in next request
-  # }
   def issue_csid(csr:, otp:)
     request(
       path: "compliance",
       method: :post,
-      body: {csr: csr},
-      headers: {"OTP" => otp},
+      body: { csr: csr.force_encoding('UTF-8') },
+      headers: { "OTP" => otp },
       authenticated: false
     )
   end
 
-  # Compliance Invoice API
   def compliance_check(uuid:, invoice_hash:, invoice:)
     request(
       path: "compliance/invoices",
       method: :post,
       body: {
-        uuid: uuid,
-        invoiceHash: invoice_hash,
-        invoice: invoice
+        uuid: uuid.force_encoding('UTF-8'),
+        invoiceHash: invoice_hash.force_encoding('UTF-8'),
+        invoice: invoice.force_encoding('UTF-8')
       }
     )
   end
 
-  # Production CSID (Onboarding) API
-  # This endpoint gives you the Base64-encoded certificate back
-  # compliance_request_id is retrieved from the issue_csid request, and is
-  # in the response as responseID
   def issue_production_csid(compliance_request_id:)
     request(
       path: "production/csids",
       method: :post,
-      body: {compliance_request_id: compliance_request_id}
+      body: { compliance_request_id: compliance_request_id.force_encoding('UTF-8') }
     )
   end
 
-  # Production CSID (Renewal) API
-  # csr stands for Certificate Signing Request
-  # otp stands for One Time Password
   def renew_production_csid(otp:, csr:)
     request(
       path: "production/csids",
       method: :patch,
-      body: {csr: csr},
-      headers: {"OTP" => otp}
+      body: { csr: csr.force_encoding('UTF-8') },
+      headers: { "OTP" => otp }
     )
   end
 
@@ -148,44 +118,46 @@ class ZATCA::Client
     headers = default_headers.merge(headers)
 
     before_submitting_request&.call(method, url, body, headers)
-    log("Requesting #{method} #{url} with\n\nbody: #{body}\n\nheaders: #{headers}\n")
+    log("Requesting #{method.upcase} #{url} with\n\nbody: #{body}\n\nheaders: #{headers}\n")
 
-    client = if authenticated
-      authenticated_request_cilent
-    else
-      unauthenticated_request_client
-    end
+    uri = URI.parse(url)
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = true
 
-    response = client.send(method, url, json: body, headers: headers)
+    request = case method
+              when :post
+                Net::HTTP::Post.new(uri.path, headers)
+              when :patch
+                Net::HTTP::Patch.new(uri.path, headers)
+              else
+                raise "Unsupported method: #{method}"
+              end
+
+    request.basic_auth(@username, @password) if authenticated
+    request.body = body.to_json
+
+    response = http.request(request)
     before_parsing_response&.call(response)
     log("Raw response: #{response}")
 
-    if response.instance_of?(HTTPX::ErrorResponse)
+    if response.code.to_i >= 400
       return {
-        message: response.error&.message,
-        details: response.to_s
+        message: response.message,
+        details: response.body
       }
     end
 
-    response_body = response.body.to_s
+    response_body = response.body
 
-    parsed_body = if response.headers["Content-Type"] == "application/json"
-      parse_json_or_return_string(response_body)
-    else
-      response_body
-    end
+    parsed_body = if response.content_type == "application/json"
+                    parse_json_or_return_string(response_body)
+                  else
+                    response_body
+                  end
 
     log("Response body: #{parsed_body}")
 
     parsed_body
-  end
-
-  def authenticated_request_cilent
-    HTTPX.plugin(:basic_authentication).basic_auth(@username, @password)
-  end
-
-  def unauthenticated_request_client
-    HTTPX
   end
 
   def default_headers
