@@ -251,8 +251,10 @@ class ZATCA::UBL::Invoice < ZATCA::UBL::BaseComponent
   end
 
   def sign(
-    private_key_path:,
-    certificate_path:,
+    private_key_path: nil,
+    certificate_path: nil,
+    private_key: nil,
+    certificate:  nil,
     signing_time: Time.now.utc.strftime("%Y-%m-%dT%H:%M:%S"),
     decode_private_key_from_base64: false
   )
@@ -262,10 +264,13 @@ class ZATCA::UBL::Invoice < ZATCA::UBL::BaseComponent
     canonicalized_xml = generate_unsigned_xml(canonicalized: true)
     generated_hashes = ZATCA::Hashing.generate_hashes(canonicalized_xml)
 
+
+
     # Sign the invoice hash using the private key
     signature = ZATCA::Signing::ECDSA.sign(
       content: generated_hashes[:hexdigest],
-      private_key_path: private_key_path,
+      private_key_path: nil,
+      private_key: private_key,
       decode_from_base64: decode_private_key_from_base64
     )
 
@@ -273,7 +278,7 @@ class ZATCA::UBL::Invoice < ZATCA::UBL::BaseComponent
     @signed_hash_bytes = signature[:bytes]
 
     # Parse and hash the certificate
-    parsed_certificate = ZATCA::Signing::Certificate.read_certificate(certificate_path)
+    parsed_certificate = ZATCA::Signing::Certificate.read_certificate(certificate_path: nil, certificate: certificate)
     @public_key_bytes = parsed_certificate.public_key_bytes
 
     # Current Version
